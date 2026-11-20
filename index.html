@@ -83,7 +83,10 @@ input,select{font-family:inherit}
 .airow{display:flex;align-items:center;gap:8px;margin-bottom:6px}
 .airow span{flex:0 0 92px;font-weight:700}
 .airow select{flex:1;padding:8px;border:2px solid #d5dbe6;border-radius:10px;font-size:15px}
-.reacts{display:flex;gap:4px}
+.reactWrap{position:relative}
+.reacts{display:none;gap:6px;position:fixed;left:50%;top:45%;transform:translate(-50%,-50%);justify-content:center;background:#3a2412;padding:8px;border-radius:14px;box-shadow:0 6px 18px rgba(0,0,0,.5);flex-wrap:wrap;width:250px;z-index:30}
+.reacts.on{display:flex}
+@media (min-width:1000px){#bReact{display:none}.reacts{display:flex;position:static;background:none;padding:0;box-shadow:none;width:auto;flex-wrap:nowrap;transform:none}}
 .rbtn{background:#5a3a1e;border-radius:10px;font-size:20px;padding:4px 7px;line-height:1}
 .rbtn:active{transform:scale(.9)}
 #fxLayer{position:fixed;inset:0;pointer-events:none;z-index:45;overflow:hidden}
@@ -222,7 +225,7 @@ table.res td.l{text-align:left}
   <div id="tableWrap"><div id="table"></div></div>
   <div id="controls">
     <div id="status"></div>
-    <div class="reacts" id="reacts"></div>
+    <div class="reactWrap"><button class="cbtn" id="bReact" onclick="$('#reacts').classList.toggle('on')">😊</button><div class="reacts" id="reacts"></div></div>
     <button class="cbtn" id="bUndo" onclick="undoTurn()">↺ 되돌리기</button>
     <button class="cbtn" id="bTidy" onclick="tidyTable()">▤ 정돈</button>
     <button class="cbtn" id="bS1" onclick="sortRack('num')">777</button>
@@ -542,28 +545,48 @@ function orderedSel(){
   tb.sort((a,b)=>a[0]-b[0]); rk.sort((a,b)=>a[0]-b[0]);
   return [...tb,...rk].map(x=>x[1]);
 }
+/* 순서가 틀린 묶음을 자동으로 맞춰 줌 (예: 9 10 11 8 → 8 9 10 11) */
+function fixOrder(order, block){
+  if(checkSet(order).ok) return order;
+  const others=order.filter(id=>!block.includes(id));
+  for(const b of [block,[...block].reverse()])
+    for(let k=0;k<=others.length;k++){ const cand=[...others.slice(0,k),...b,...others.slice(k)]; if(checkSet(cand).ok) return cand; }
+  const rev=[...order].reverse(); if(checkSet(rev).ok) return rev;
+  if(order.every(id=>id<104)){ const srt=[...order].sort((a,b)=>T(a).n-T(b).n||a-b); if(checkSet(srt).ok) return srt; }
+  return null;
+}
 function placeOnTable(ids, gi, target){
   if(!W) return;
   ids=ids.filter(canMove); if(!ids.length) return;
   const tb=clone(W.table), rk=[...W.rack];
   ids.forEach(id=>{ const c=locate(tb,id); if(c>=0) delete tb['c'+c]; const i=rk.indexOf(id); if(i>=0) rk.splice(i,1); });
   const r=Math.floor(target/COLS), c=target%COLS, n=ids.length;
-  const occ=col=>tb['c'+(r*COLS+col)]!=null;
-  const free=(s)=>{ if(s<0||s+n>COLS) return false; for(let j=0;j<n;j++) if(occ(s+j)) return false; return true; };
-  let start=Math.max(0,Math.min(COLS-n,c-gi));
-  if(!free(start)){
-    if(free(c)) start=c;
-    else if(occ(c)){
-      // 끼워 넣기: c부터 이어진 타일들을 오른쪽으로 n칸 밀기
-      let e=c; while(e<COLS && occ(e)) e++;
-      let ok=e+n<=COLS; for(let j=0;j<n&&ok;j++) if(occ(e+j)) ok=false;
-      if(ok && e+n<COLS && occ(e+n)) ok=false;
-      if(!ok){ toast('이 줄에 자리가 부족해요'); renderGame(); return; }
-      for(let col=e-1;col>=c;col--){ tb['c'+(r*COLS+col+n)]=tb['c'+(r*COLS+col)]; delete tb['c'+(r*COLS+col)]; }
-      start=c;
-    } else { toast('놓을 자리가 부족해요'); renderGame(); return; }
+  const key=col=>'c'+(r*COLS+col);
+  const occ=col=>col>=0 && col<COLS && tb[key(col)]!=null;
+  const fail=m=>{ toast(m); renderGame(); };
+  if(occ(c)){
+    // 묶음 위에 놓음 → 그 묶음에 합치기 (놓은 타일 앞에 끼워 넣고, 순서가 틀리면 자동 정렬)
+    let a=c; while(occ(a-1)) a--; let e=c; while(occ(e+1)) e++;
+    const others=[]; for(let k=a;k<=e;k++){ others.push(tb[key(k)]); delete tb[key(k)]; }
+    let order=[...others.slice(0,c-a),...ids,...others.slice(c-a)];
+    order=fixOrder(order,ids)||order;
+    const L=order.length;
+    const fits=st=>{ if(st<0||st+L>COLS) return false; for(let j=0;j<L;j++) if(occ(st+j)) return false; return !occ(st-1)&&!occ(st+L); };
+    let start=-1;
+    for(let st=a; st>=a-n-1 && start<0; st--) if(fits(st)) start=st;      // 제자리 → 왼쪽으로 조금
+    for(let st=a; st+L<=COLS && start<0; st++) if(fits(st)) start=st;      // 오른쪽으로
+    if(start>=0) order.forEach((id,j)=>tb[key(start+j)]=id);
+    else { const pos=findSpace(tb,L); if(pos<0) return fail('테이블에 자리가 부족해요. [정돈]을 눌러 보세요'); order.forEach((id,j)=>tb['c'+(pos+j)]=id); }
+  } else {
+    const free=st=>{ if(st<0||st+n>COLS) return false; for(let j=0;j<n;j++) if(occ(st+j)) return false; return true; };
+    let start=Math.max(0,Math.min(COLS-n,c-gi));
+    if(!free(start)){ if(free(c)) start=c; else return fail('놓을 자리가 부족해요'); }
+    ids.forEach((id,j)=>tb[key(start+j)]=id);
+    // 옆 묶음과 붙었으면 순서 자동 맞춤
+    let a=start; while(occ(a-1)) a--; let e=start+n-1; while(occ(e+1)) e++;
+    const seg=[]; for(let k=a;k<=e;k++) seg.push(tb[key(k)]);
+    if(seg.length>n && !checkSet(seg).ok){ const f=fixOrder(seg,ids); if(f) f.forEach((id,j)=>tb[key(a+j)]=id); }
   }
-  ids.forEach((id,j)=>tb['c'+(r*COLS+start+j)]=id);
   W.table=tb; W.rack=rk; sel=[]; renderGame(); pushDraft();
 }
 function moveToRack(ids, beforeId){
@@ -739,7 +762,7 @@ function renderGame(){
   } else if(G.players[G.turn].ai) st=`🤖 <b>${esc(pname(pid))}</b> 생각 중…`;
   else st=`<b>${esc(pname(pid))}</b>님 차례 진행 중…`;
   $('#status').innerHTML=st;
-  $('#skipBtn').style.display = (MODE==='online' && !VIEWER && G.status==='playing' && !my && (ROOM&&ROOM.host===ME || timeLeft()<-10)) ? '' : 'none';
+  $('#skipBtn').style.display = (MODE==='online' && !VIEWER && G.status==='playing' && !my && (amHost() || timeLeft()<-10)) ? '' : 'none';
 }
 
 function renderResult(){
@@ -774,7 +797,7 @@ setInterval(()=>{
   const left=timeLeft(), s=Math.max(0,Math.ceil(left));
   el.textContent=fmt(s); el.classList.toggle('warn', s<=10);
   if(left<=0 && isMyTurn() && W && timeoutKey!==G.turnKey){ timeoutKey=G.turnKey; handleTimeout(); }
-  if(MODE==='online') $('#skipBtn').style.display = (!VIEWER && !isMyTurn() && (ROOM&&ROOM.host===ME || left<-10)) ? '' : 'none';
+  if(MODE==='online') $('#skipBtn').style.display = (!VIEWER && !isMyTurn() && (amHost() || left<-10)) ? '' : 'none';
 },250);
 function fmt(s){ return Math.floor(s/60)+':'+String(s%60).padStart(2,'0'); }
 
@@ -783,6 +806,7 @@ const EMOS=['👍','👏','😂','😮','😭','🤔','😴','🔥','🙏'];
 let lastReact=0;
 function sendReact(e){
   if(!G||VIEWER) return;
+  $('#reacts').classList.remove('on');
   const t=Date.now(); if(t-lastReact<1200) return; lastReact=t;
   if(MODE==='online' && reactRef) reactRef.push({p:ME,e,t:now()});
   else { showReaction(ME,e);
@@ -870,7 +894,7 @@ function aiPlay(){
 
 /* AI 두뇌: 타일 묶음 찾기 (백트래킹)
    tiles 중 required는 반드시 묶음에 들어가야 함. mode 'value' = 묶음 점수 최대, 'count' = 새로 내는 타일 최대 */
-function solveSets(tiles, required, mode, limit, ms=700){
+function solveSets(tiles, required, mode, limit, ms=700, prefer=[]){
   const isJ=id=>id>=104;
   const order=tiles.slice().sort((a,b)=>{
     const ra=isJ(a)?2:(required.has(a)?0:1), rb=isJ(b)?2:(required.has(b)?0:1);
@@ -898,6 +922,7 @@ function solveSets(tiles, required, mode, limit, ms=700){
       for(let j=0;j<=jok.length;j++){ const size=1+S.length+j; if(size>=3&&size<=4) out.push([t,...S,...jok.slice(0,j)].sort((a,b)=>a-b)); }
     }
     out.sort((a,b)=>b.length-a.length);
+    for(const ps of prefer) if(ps.includes(t) && ps.every(id=>id===t||!gone.has(id))) out.unshift([...ps]);   // 원래 묶음을 먼저 시도
     return out;
   }
   function record(){
@@ -962,7 +987,7 @@ function aiDecide(pid, lv){
   let plan=easyPlan(pid, L);
   if(L.search && plan.played.length<hand.length){
     const tableIds=Object.values(G.table);
-    const r=solveSets(tableIds.concat(hand), new Set(tableIds), 'count', L.search, L.ms);
+    const r=solveSets(tableIds.concat(hand), new Set(tableIds), 'count', L.search, L.ms, segmentsOf(G.table).map(s=>s.ids));
     if(r && r.used.length>plan.played.length) plan={sets:r.sets, played:r.used};
   }
   return plan.played.length ? plan : null;
@@ -987,14 +1012,27 @@ function findSpace(tb,L){
   return -1;
 }
 function layoutSets(oldTable, sets){
-  const old=new Map(segmentsOf(oldTable).map(s=>[s.ids.join(','),s]));
-  const tb={}, rest=[];
+  const oldSegs=segmentsOf(oldTable), used=new Set(), tb={}, pending=[];
+  const sk=a=>[...a].sort((x,y)=>x-y).join(',');
+  // 1) 내용이 같은 묶음은 원래 자리·원래 순서 그대로
   for(const set of sets){
-    const s=old.get(set.join(','));
-    if(s){ s.ids.forEach((id,j)=>tb['c'+s.cells[j]]=id); old.delete(set.join(',')); } else rest.push(set);
+    const k=sk(set), i=oldSegs.findIndex((o,i)=>!used.has(i)&&sk(o.ids)===k);
+    if(i>=0){ used.add(i); oldSegs[i].ids.forEach((id,j)=>tb['c'+oldSegs[i].cells[j]]=id); } else pending.push(set);
   }
-  for(const set of rest){
-    const pos=findSpace(tb,set.length);
+  const occ=(r,c)=>c>=0&&c<COLS&&tb['c'+(r*COLS+c)]!=null;
+  const fits=(r,st,L)=>{ if(st<0||st+L>COLS) return false; for(let j=-1;j<=L;j++) if(occ(r,st+j)) return false; return true; };
+  // 2) 바뀐 묶음은 가장 많이 겹치는 옛 묶음 자리 근처에
+  pending.sort((a,b)=>b.length-a.length);
+  for(const set of pending){
+    let bi=-1,bo=0;
+    oldSegs.forEach((o,i)=>{ if(used.has(i)) return; const ov=o.ids.filter(id=>set.includes(id)).length; if(ov>bo){bo=ov;bi=i;} });
+    let pos=-1;
+    if(bi>=0){
+      used.add(bi); const o=oldSegs[bi], r=Math.floor(o.cells[0]/COLS), c0=o.cells[0]%COLS;
+      const first=o.ids.find(id=>set.includes(id)), want=c0-set.indexOf(first)+o.ids.indexOf(first);
+      for(let d=0; d<=COLS && pos<0; d++) for(const st of d?[want-d,want+d]:[want]) if(pos<0&&fits(r,st,set.length)) pos=r*COLS+st;
+    }
+    if(pos<0) pos=findSpace(tb,set.length);
     if(pos<0) return packSets(sets)||tb;
     set.forEach((id,j)=>tb['c'+(pos+j)]=id);
   }
@@ -1004,7 +1042,7 @@ function layoutSets(oldTable, sets){
 /* ---------- 온라인 ---------- */
 let reactRef=null;
 let db=null, roomRef=null, ROOM=null, CODE=null, DRAFT=null, srvOffset=0;
-const ONLINE_ID=(()=>{ try{ let v=localStorage.getItem('rk_pid'); if(!v){ v='p'+Math.random().toString(36).slice(2,10); localStorage.setItem('rk_pid',v);} return v; }catch(e){ return 'p'+Math.random().toString(36).slice(2,10); } })();
+const ONLINE_ID=(()=>{ try{ let v=sessionStorage.getItem('rk_pid'); if(!v){ v='p'+Math.random().toString(36).slice(2,10); sessionStorage.setItem('rk_pid',v);} return v; }catch(e){ return 'p'+Math.random().toString(36).slice(2,10); } })();
 let ME=ONLINE_ID;
 try{ const n=localStorage.getItem('rk_name'); if(n) $('#oName').value=n; }catch(e){}
 
@@ -1028,6 +1066,7 @@ async function createRoom(){
   if(!initFB()) return;
   let code;
   for(let i=0;i<10;i++){ code=String(Math.floor(1000+Math.random()*9000)); const s=await db.ref(roomPath(code)).get(); if(!s.exists()) break; }
+  db.ref(fxPath(code)).remove();
   await db.ref(roomPath(code)).set({host:ME,status:'lobby',created:Date.now(),timer:60,players:{[ME]:{name,t:Date.now()}}});
   enterRoom(code,false);
 }
@@ -1071,11 +1110,18 @@ function enterRoom(code,asViewer){
     onGameUpdate();
   });
 }
+function amHost(){
+  if(!ROOM) return false;
+  const ps=ROOM.players||{};
+  if(ps[ROOM.host] || (ROOM.game && ROOM.game.players && ROOM.game.players.some(p=>p.id===ROOM.host) && ROOM.status!=='lobby')) return ROOM.host===ME;
+  const first=Object.entries(ps).sort((a,b)=>a[1].t-b[1].t)[0];   // 방장이 나가면 가장 먼저 들어온 사람이 방장
+  return !!first && first[0]===ME;
+}
 function renderLobby(){
   $('#lbCode').textContent=CODE;
   const ps=Object.entries(ROOM.players||{}).sort((a,b)=>a[1].t-b[1].t);
-  const host=ROOM.host===ME;
-  $('#lbList').innerHTML=ps.map(([id,p])=>`<li>${esc(p.name)} ${id===ROOM.host?'<span class="badge">방장</span>':''}${id===ME?' (나)':''}
+  const host=amHost();
+  $('#lbList').innerHTML=ps.map(([id,p])=>`<li>${esc(p.name)} ${(id===ROOM.host||(!(ROOM.players||{})[ROOM.host]&&id===ps[0][0]))?'<span class="badge">방장</span>':''}${id===ME?' (나)':''}
     ${host&&id!==ME?`<button class="x" onclick="kick('${id}')">✕</button>`:''}</li>`).join('') || '<li>아직 아무도 없어요</li>';
   $('#lbHost').style.display=host?'':'none';
   $('#lbTimer').value=String(ROOM.timer??60);
