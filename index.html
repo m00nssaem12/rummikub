@@ -275,7 +275,7 @@ table.res td.l{text-align:left}
   <h3>조작 방법</h3>
   <ul>
     <li>타일을 <b>끌어서</b> 테이블 빈칸에 놓아요. 묶음 중간 타일 위에 놓으면 그 자리에 <b>끼워 넣어져요</b>.</li>
-    <li>타일을 <b>탭</b>하면 여러 개를 고를 수 있고, 빈칸을 탭하면 고른 타일이 한 줄로 놓여요.</li>
+    <li><b>여러 개 한꺼번에</b>: 타일을 하나씩 <b>탭</b>해서 고른 뒤 빈칸을 탭하면 한 줄로 놓여요(숫자 순서는 자동 정렬). 테이블 묶음을 탭하면 그 묶음에 붙고, 고른 타일 중 하나를 끌면 모두 같이 움직여요.</li>
     <li>테이블 타일을 <b>두 번 탭</b>하면 그 묶음 전체가 선택돼요.</li>
     <li>빨간 타일 = 잘못된 묶음, 초록 테두리 = 이번 차례에 낸 타일</li>
     <li><b>777</b>: 숫자순 정렬, <b>789</b>: 색깔순 정렬, <b>정돈</b>: 테이블 묶음 정리</li>
@@ -585,7 +585,7 @@ function placeOnTable(ids, gi, target){
     // 옆 묶음과 붙었으면 순서 자동 맞춤
     let a=start; while(occ(a-1)) a--; let e=start+n-1; while(occ(e+1)) e++;
     const seg=[]; for(let k=a;k<=e;k++) seg.push(tb[key(k)]);
-    if(seg.length>n && !checkSet(seg).ok){ const f=fixOrder(seg,ids); if(f) f.forEach((id,j)=>tb[key(a+j)]=id); }
+    if(seg.length>=3 && !checkSet(seg).ok){ const f=fixOrder(seg,ids); if(f) f.forEach((id,j)=>tb[key(a+j)]=id); }
   }
   W.table=tb; W.rack=rk; sel=[]; renderGame(); pushDraft();
 }
@@ -616,6 +616,9 @@ document.addEventListener('pointerdown',e=>{
   const el=e.target.closest('#table .tile, #rack .tile');
   if(el){
     const id=+el.dataset.id, src=el.dataset.src;
+    if(W && src==='table' && sel.length && !sel.includes(id) && sel.some(x=>W.rack.includes(x))){
+      placeOnTable(orderedSel(),0,+el.closest('.cell').dataset.cell); e.preventDefault(); return;
+    }
     if(!canGrab(id,src)){
       if(W && src==='table') toast(`첫 등록(${MELD}점)을 마친 다음 차례부터 테이블 타일을 옮길 수 있어요`);
       return;
@@ -636,7 +639,7 @@ document.addEventListener('pointermove',e=>{
     drag.ids = (W && sel.includes(drag.id)) ? orderedSel() : [drag.id];
     drag.gi = drag.ids.indexOf(drag.id);
     ghost=document.createElement('div'); ghost.className='ghost';
-    ghost.innerHTML=drag.ids.map(id=>tileHTML(id,'g')).join('');
+    ghost.innerHTML=drag.ids.map(id=>tileHTML(id,'g')).join('')+(drag.ids.length>1?`<span style="position:absolute;top:-12px;right:-12px;background:#ffd23f;color:#222;border-radius:12px;padding:1px 8px;font-weight:900;font-size:14px">${drag.ids.length}</span>`:'');
     document.body.appendChild(ghost);
     drag.ids.forEach(id=>document.querySelectorAll(`#table .tile[data-id="${id}"], #rack .tile[data-id="${id}"]`).forEach(t=>t.classList.add('dragging')));
   }
@@ -753,12 +756,19 @@ function renderGame(){
   $('#bDraw').textContent = G.pool.length ? '뽑고 넘기기' : '넘기기';
   let st='';
   if(G.status!=='playing') st='라운드가 끝났어요';
+  else if(my && W && sel.length){
+    st=`<b class="ok">${sel.length}개 선택</b> · 테이블 빈칸이나 묶음을 누르면 한꺼번에 놓여요 <button class="cbtn" style="padding:3px 9px;font-size:12px;margin-left:4px" onclick="sel=[];renderGame()">선택 해제</button>`;
+  }
   else if(my && W){
     const segs=segmentsOf(W.table), nbad=segs.filter(s=>!checkSet(s.ids).ok).length, pl=played().length;
     st = '<b>내 차례</b> · ';
     if(!G.melded[pid]){ const mp=meldPoints(); st+=`첫 등록 <span class="${mp>=MELD?'ok':'no'}">${mp} / ${MELD}점</span> · `; }
     st+= pl? `낸 타일 ${pl}개 · ` : '';
-    st+= nbad ? `<span class="no">✖ 틀린 묶음 ${nbad}개</span>` : (pl?'<span class="ok">✔ 완료할 수 있어요</span>':'타일을 끌어서 내려놓으세요');
+    if(nbad) st+=`<span class="no">✖ 틀린 묶음 ${nbad}개</span>`;
+    else if(!pl) st+='타일을 끌어서 내려놓으세요';
+    else { const v=validateTurn();
+      st+= v.ok ? '<span class="ok">✔ 완료할 수 있어요</span>'
+        : `<span class="no">✖ ${v.msg.includes('내 타일만')?'첫 등록엔 테이블 묶음에 붙일 수 없어요':v.msg.includes('점 이상')?`첫 등록은 ${MELD}점 이상이어야 해요`:'아직 완료할 수 없어요'}</span>`; }
   } else if(G.players[G.turn].ai) st=`🤖 <b>${esc(pname(pid))}</b> 생각 중…`;
   else st=`<b>${esc(pname(pid))}</b>님 차례 진행 중…`;
   $('#status').innerHTML=st;
